@@ -1,0 +1,63 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files (never commit real secrets; the .example template is tracked)
+.env
+.env.local
+.env.*.local
+.env.development
+.env.production
+.env.test
+!.env.example
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# database
+/prisma/dev.db
+/prisma/dev.db-journal
+
+# user-uploaded content (local dev storage)
+/public/uploads/*
+!/public/uploads/.gitkeep
+/storage/*
+!/storage/.gitkeep
+!/storage/avatars
+/storage/avatars/*
+!/storage/avatars/.gitkeep
+!/storage/commissions
+/storage/commissions/*
+!/storage/commissions/.gitkeep
