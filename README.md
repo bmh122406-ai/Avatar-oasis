@@ -8,34 +8,23 @@ and buyers can request custom commissions from any creator.
 ## Stack
 
 - **Next.js 16** (App Router, Turbopack) + TypeScript
-- **Prisma** + **Postgres** (Vercel Postgres, Neon, Supabase, or any hosted Postgres)
+- **Prisma** + SQLite for local dev (swap the datasource to Postgres for production)
 - **Stripe** — Checkout for payments, Connect (Express accounts) for creator payouts
 - **Custom session auth** — signed JWT in an httpOnly cookie (bcrypt password hashes), no third-party auth library
 - **Tailwind CSS v4**
 
 ## Getting started
 
-1. Get a Postgres connection string. Any of these have a free tier and take under
-   two minutes to set up:
-   - [Vercel Postgres](https://vercel.com/docs/storage/vercel-postgres) (nice if you're deploying to Vercel anyway)
-   - [Neon](https://neon.tech)
-   - [Supabase](https://supabase.com)
-2. Put it in `.env` as `DATABASE_URL` (see `.env.example` for the full list of variables).
-3. Install and sync the schema:
-   ```bash
-   npm install
-   npx prisma db push
-   npm run dev
-   ```
+```bash
+npm install
+npx prisma migrate dev
+npm run dev
+```
 
-The app runs at http://localhost:3000. Uploaded thumbnails/preview images are
-saved to `public/uploads`; the actual avatar package files buyers pay for are
-saved to `storage/` (outside `public`, never served directly — see "How
-downloads stay secure" below).
-
-> **Local filesystem storage is a dev-only shortcut.** It works for `npm run dev`
-> on your machine, but will **not** work once deployed to Vercel (or any
-> serverless host) — see "Deploying to Vercel" below.
+The app runs at http://localhost:3000. A SQLite file (`dev.db`) is created
+automatically. Uploaded thumbnails/preview images are saved to `public/uploads`;
+the actual avatar package files buyers pay for are saved to `storage/` (outside
+`public`, never served directly — see "How downloads stay secure" below).
 
 ## Configuring Stripe (required for payments to work)
 
@@ -96,45 +85,15 @@ src/lib/                   Session auth, Stripe client, file storage, validation
 src/app/api/               Route handlers (auth, avatars, checkout, webhooks, commissions, profile, Connect)
 src/app/                   Pages: home, browse, avatar detail, upload, dashboard, profile, commissions, auth
 src/components/            Shared UI + client components (forms, purchase/claim buttons)
-storage/                   Private avatar package files (dev-only local storage)
-public/uploads/            Public images (dev-only local storage)
+storage/                   Private avatar package files (gitignored in spirit — not web-accessible)
+public/uploads/            Public images (thumbnails, previews, avatars, profile pictures)
 ```
-
-## Deploying to Vercel
-
-1. Push this repo to GitHub and import it in Vercel.
-2. In **Project Settings → Environment Variables**, add everything from
-   `.env.example` with real values — `.env` itself is gitignored and never
-   reaches Vercel, so nothing is configured until you add it here. At minimum:
-   `DATABASE_URL`, `AUTH_SECRET`, `STRIPE_SECRET_KEY`,
-   `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY`, `STRIPE_WEBHOOK_SECRET`, `APP_URL`
-   (set this to your `https://your-app.vercel.app` domain, or custom domain).
-3. Push the schema to your production database once, from your machine, with
-   `DATABASE_URL` pointed at production: `npx prisma db push`.
-4. Deploy. The build runs `prisma generate && next build` automatically
-   (see `package.json`).
-5. Add a **production** Stripe webhook endpoint in the Stripe dashboard
-   pointing at `https://your-app.vercel.app/api/webhooks/stripe`, and put its
-   signing secret in `STRIPE_WEBHOOK_SECRET` on Vercel.
-
-### The one thing that still won't work after deploying: file uploads
-
-`src/lib/storage.ts` currently writes uploaded files to the local filesystem
-(`public/uploads/`, `storage/`). That's fine in `npm run dev`, but **Vercel's
-serverless functions don't have a writable, persistent disk** — an upload
-will either fail outright or appear to succeed and then vanish on the next
-request. Nothing else in the app is affected (browsing, auth, checkout, and
-payouts all work fine), but avatar/profile-picture/commission-reference
-uploads need real object storage before they'll work in production. The
-straightforward fix is swapping `storage.ts` to use
-[Vercel Blob](https://vercel.com/docs/storage/vercel-blob) (or S3/R2) instead
-of `fs.writeFile` — ask for this to be wired up if you want uploads working
-on the deployed site.
 
 ## Notes for production
 
-- Set real, non-placeholder values for every secret (`AUTH_SECRET`, Stripe
-  keys) directly in your host's environment variable settings — never commit
-  `.env`.
-- See "The one thing that still won't work" above before relying on uploads
-  in production.
+- Swap `datasource db { provider = "sqlite" }` in `prisma/schema.prisma` for
+  `postgresql` and point `DATABASE_URL` at a real database.
+- Swap local file storage (`src/lib/storage.ts`) for S3/R2/GCS — the local
+  filesystem won't survive most serverless deployments.
+- Set real, non-placeholder values for every secret in `.env` (`AUTH_SECRET`,
+  Stripe keys) and never commit `.env`.
