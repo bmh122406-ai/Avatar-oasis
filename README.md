@@ -1,99 +1,156 @@
-# Avatar Oasis
+generator client {
+  provider = "prisma-client-js"
+}
 
-A marketplace for VRChat avatars: creators upload and sell avatars, buyers get a
-secure gated download after checkout, creators get paid out via Stripe Connect
-minus a platform fee, homepage placement is sold as limited "featured slots,"
-and buyers can request custom commissions from any creator.
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
 
-## Stack
+enum Role {
+  BUYER
+  CREATOR
+  ADMIN
+}
 
-- **Next.js 16** (App Router, Turbopack) + TypeScript
-- **Prisma** + SQLite for local dev (swap the datasource to Postgres for production)
-- **Stripe** — Checkout for payments, Connect (Express accounts) for creator payouts
-- **Custom session auth** — signed JWT in an httpOnly cookie (bcrypt password hashes), no third-party auth library
-- **Tailwind CSS v4**
+enum AvatarStatus {
+  DRAFT
+  PUBLISHED
+}
 
-## Getting started
+enum OrderStatus {
+  PENDING
+  COMPLETED
+  REFUNDED
+  FAILED
+}
 
-```bash
-npm install
-npx prisma migrate dev
-npm run dev
-```
+enum FeaturedStatus {
+  PENDING
+  ACTIVE
+  EXPIRED
+}
 
-The app runs at http://localhost:3000. A SQLite file (`dev.db`) is created
-automatically. Uploaded thumbnails/preview images are saved to `public/uploads`;
-the actual avatar package files buyers pay for are saved to `storage/` (outside
-`public`, never served directly — see "How downloads stay secure" below).
+enum CommissionStatus {
+  OPEN
+  ACCEPTED
+  IN_PROGRESS
+  DELIVERED
+  COMPLETED
+  DECLINED
+  CANCELLED
+}
 
-## Configuring Stripe (required for payments to work)
+model User {
+  id                    String    @id @default(cuid())
+  email                 String    @unique
+  username              String    @unique
+  passwordHash          String
+  displayName           String
+  bio                   String    @default("")
+  avatarImageUrl         String?
+  bannerImageUrl         String?
+  socialLinks           String    @default("{}") // JSON string: { twitter, discord, website, vrchat }
+  role                  Role      @default(BUYER)
+  isCreator             Boolean   @default(false)
+  stripeAccountId       String?
+  stripeOnboarded       Boolean   @default(false)
+  stripeCustomerId      String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
 
-The `.env` file ships with placeholder Stripe keys so the app boots without
-crashing, but checkout, Connect onboarding, and payouts will fail until you add
-real **test mode** keys:
+  avatars               Avatar[]        @relation("CreatorAvatars")
+  orders                Order[]         @relation("BuyerOrders")
+  commissionsRequested  Commission[]    @relation("BuyerCommissions")
+  commissionsReceived   Commission[]    @relation("CreatorCommissions")
+  featuredPurchases     FeaturedSlot[]  @relation("PurchasedFeaturedSlots")
+}
 
-1. Create a free Stripe account and grab your test keys from
-   https://dashboard.stripe.com/test/apikeys.
-2. Set `STRIPE_SECRET_KEY` and `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` in `.env`.
-3. Enable **Stripe Connect** (Express accounts) in your dashboard —
-   https://dashboard.stripe.com/test/connect/accounts/overview — no extra config
-   needed for test mode.
-4. Forward webhooks to your local server with the Stripe CLI:
-   ```bash
-   stripe listen --forward-to localhost:3000/api/webhooks/stripe
-   ```
-   Copy the `whsec_...` value it prints into `STRIPE_WEBHOOK_SECRET`.
-5. Restart `npm run dev`.
+model Avatar {
+  id             String        @id @default(cuid())
+  creatorId      String
+  creator        User          @relation("CreatorAvatars", fields: [creatorId], references: [id], onDelete: Cascade)
+  title          String
+  description    String
+  priceCents     Int
+  category       String        @default("Base Model") // Base Model, Modification, Full Avatar, Accessory
+  platform       String        @default("PC")          // PC, Quest, PC & Quest
+  tags           String        @default("[]")          // JSON array of strings
+  thumbnailUrl   String
+  previewImages  String        @default("[]")          // JSON array of image URLs
+  fileKey        String                                 // path within /storage — never served directly
+  fileName       String
+  fileSizeBytes  Int           @default(0)
+  polycount      Int?
+  status         AvatarStatus  @default(DRAFT)
+  isFeatured     Boolean       @default(false)
+  featuredUntil  DateTime?
+  downloadCount  Int           @default(0)
+  viewCount      Int           @default(0)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
 
-Without a webhook listener running, Stripe Checkout will still redirect the
-buyer back to your success page, but the order will stay `PENDING` forever
-because nothing ever confirms payment — the webhook is the only thing that
-marks an order `COMPLETED` or activates a featured slot. This is deliberate:
-see the next section.
+  orders         Order[]
+  featuredSlots  FeaturedSlot[]
 
-## How the secure purchase gateway works
+  @@index([status])
+  @@index([isFeatured])
+}
 
-- Avatar package files live in `storage/`, outside `public/`, so there is no
-  direct URL to them.
-- `POST /api/checkout` creates a Stripe Checkout Session with
-  `payment_intent_data.transfer_data.destination` set to the creator's
-  connected Stripe account and `application_fee_amount` set to the platform's
-  cut. It also writes a `PENDING` `Order` row.
-- **Only** the Stripe webhook handler (`/api/webhooks/stripe`, signature
-  verified with `STRIPE_WEBHOOK_SECRET`) flips that order to `COMPLETED`. No
-  client-side code, redirect, or success page can mark a purchase as paid.
-- `GET /api/avatars/[id]/download` checks that the requester is either the
-  avatar's creator or has a `COMPLETED` order for it before reading the file
-  off disk and streaming it back.
+model Order {
+  id                    String      @id @default(cuid())
+  buyerId               String
+  buyer                 User        @relation("BuyerOrders", fields: [buyerId], references: [id], onDelete: Cascade)
+  avatarId              String
+  avatar                Avatar      @relation(fields: [avatarId], references: [id], onDelete: Cascade)
+  amountTotalCents      Int
+  platformFeeCents      Int
+  creatorPayoutCents    Int
+  stripeCheckoutSessionId String    @unique
+  stripePaymentIntentId  String?
+  status                OrderStatus @default(PENDING)
+  createdAt              DateTime   @default(now())
+  updatedAt              DateTime   @updatedAt
 
-## Platform economics
+  @@index([buyerId])
+  @@index([avatarId])
+}
 
-Configured via `.env`:
+model FeaturedSlot {
+  id                      String         @id @default(cuid())
+  avatarId                String
+  avatar                  Avatar         @relation(fields: [avatarId], references: [id], onDelete: Cascade)
+  purchasedById           String
+  purchasedBy             User           @relation("PurchasedFeaturedSlots", fields: [purchasedById], references: [id], onDelete: Cascade)
+  amountPaidCents         Int
+  durationDays            Int
+  startsAt                DateTime?
+  endsAt                  DateTime?
+  stripeCheckoutSessionId String         @unique
+  status                  FeaturedStatus @default(PENDING)
+  createdAt               DateTime       @default(now())
 
-- `PLATFORM_FEE_PERCENT` — cut of each avatar sale kept by the platform (rest
-  transfers to the creator automatically through Stripe Connect).
-- `FEATURED_SLOT_PRICE_CENTS` / `FEATURED_SLOT_DURATION_DAYS` — cost and length
-  of a homepage featured placement.
-- `FEATURED_SLOT_MAX_ACTIVE` — how many avatars can be featured at once; once
-  full, creators see the next slot's opening date instead of being able to buy one.
+  @@index([status])
+}
 
-## Project structure
+model Commission {
+  id             String            @id @default(cuid())
+  buyerId        String
+  buyer          User              @relation("BuyerCommissions", fields: [buyerId], references: [id], onDelete: Cascade)
+  creatorId      String?
+  creator        User?             @relation("CreatorCommissions", fields: [creatorId], references: [id], onDelete: SetNull)
+  title          String
+  description    String
+  avatarBase     String  @default("") // e.g. existing base model / VRChat avatar link
+  budgetMinCents Int
+  budgetMaxCents Int
+  deadline       DateTime?
+  referenceFiles String  @default("[]") // JSON array of uploaded reference image URLs
+  contactNote    String  @default("")
+  status         CommissionStatus @default(OPEN)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
-```
-prisma/schema.prisma       Data model (User, Avatar, Order, FeaturedSlot, Commission)
-src/lib/                   Session auth, Stripe client, file storage, validation
-src/app/api/               Route handlers (auth, avatars, checkout, webhooks, commissions, profile, Connect)
-src/app/                   Pages: home, browse, avatar detail, upload, dashboard, profile, commissions, auth
-src/components/            Shared UI + client components (forms, purchase/claim buttons)
-storage/                   Private avatar package files (gitignored in spirit — not web-accessible)
-public/uploads/            Public images (thumbnails, previews, avatars, profile pictures)
-```
-
-## Notes for production
-
-- Swap `datasource db { provider = "sqlite" }` in `prisma/schema.prisma` for
-  `postgresql` and point `DATABASE_URL` at a real database.
-- Swap local file storage (`src/lib/storage.ts`) for S3/R2/GCS — the local
-  filesystem won't survive most serverless deployments.
-- Set real, non-placeholder values for every secret in `.env` (`AUTH_SECRET`,
-  Stripe keys) and never commit `.env`.
+  @@index([status])
+  @@index([creatorId])
+}
